@@ -852,7 +852,7 @@
             <div class="di-text">TeraBox Videos <div class="di-sub">Watch premium content</div></div>
           </div>
           <div class="dropdown-divider"></div>
-          <div class="dropdown-item signout" onclick="showToast('Signed out!','error')">
+          <div class="dropdown-item signout" onclick="signOut()">
             <div class="di-icon">↩</div>
             <div class="di-text">Sign Out <div class="di-sub">See you soon!</div></div>
           </div>
@@ -1030,7 +1030,7 @@
         <input class="form-input" type="password" placeholder="••••••••" id="authPass" />
       </div>
     </div>
-    <button class="btn-full" onclick="handleAuth()">Sign In</button>
+    <button class="btn-full" id="authSubmitBtn" onclick="handleAuth()">Sign In</button>
     <p style="text-align:center;font-size:12px;color:var(--text3);margin-top:10px;">5 free plays as guest · 10/day after registration</p>
   </div>
 </div>
@@ -1039,55 +1039,132 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
-// ─── STATE ───────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// CONFIG — YOUR RAILWAY BACKEND URL
+// ══════════════════════════════════════════════════════════════════════════════
+const API_BASE = 'https://terastream-production-3313.up.railway.app';
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
 const state = {
-  credits: 10,
+  token: localStorage.getItem('tp_token') || null,
+  user:  JSON.parse(localStorage.getItem('tp_user') || 'null'),
+  credits: 0,
   watched: 0,
   bookmarks: [],
-  history: [],
+  history: JSON.parse(localStorage.getItem('tp_history') || '[]'),
   currentUrl: '',
   currentTitle: '',
-  isPlaying: false
+  selectedPlan: null
 };
 
-// ─── YOUR TERABOX API CONFIG ──────────────────────────────────────────────────
-// REPLACE THIS with your actual TeraBox API endpoint
-const API_BASE = 'https://your-terabox-api.example.com';
-const API_KEY  = 'YOUR_API_KEY_HERE';
-
-async function fetchVideoUrl(shareUrl) {
-  // REPLACE with your actual API call
-  // Example: GET /api/video?url=<shareUrl>&key=<API_KEY>
-  // Returns: { videoUrl: "https://...", title: "...", duration: "..." }
-  
-  // ── DEMO FALLBACK (remove once you have real API) ──
-  if (shareUrl.includes('terabox') || shareUrl.includes('1024tera') || shareUrl.includes('teraboxapp')) {
-    // Simulate API call - replace with real fetch below
-    await new Promise(r => setTimeout(r, 1200));
-    return {
-      videoUrl: null, // real API returns direct MP4 url
-      title: 'TeraBox Video – ' + shareUrl.split('/').pop(),
-      duration: '12:34',
-      embedUrl: null
-    };
-  }
-  
-  // ── REAL API CALL (uncomment and adapt) ──
-  // const res = await fetch(`${API_BASE}/api/video?url=${encodeURIComponent(shareUrl)}`, {
-  //   headers: { 'Authorization': `Bearer ${API_KEY}` }
-  // });
-  // if (!res.ok) throw new Error('API error: ' + res.status);
-  // return await res.json();
-
-  throw new Error('Please enter a valid TeraBox link');
+// ─── API HELPER ───────────────────────────────────────────────────────────────
+async function api(path, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' }
+  };
+  if (state.token) opts.headers['Authorization'] = 'Bearer ' + state.token;
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(API_BASE + path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
 }
 
-// ─── PLAY HANDLER ─────────────────────────────────────────────────────────────
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
+let authMode = 'login';
+
+function switchAuth(mode) {
+  authMode = mode;
+  document.getElementById('tabLogin').classList.toggle('active', mode === 'login');
+  document.getElementById('tabRegister').classList.toggle('active', mode === 'register');
+  document.getElementById('authSubmitBtn').textContent = mode === 'login' ? 'Sign In' : 'Create Account';
+}
+
+async function handleAuth() {
+  const email    = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPass').value.trim();
+  if (!email || !password) { showToast('Enter email and password', 'error'); return; }
+
+  const btn = document.getElementById('authSubmitBtn');
+  btn.textContent = 'Please wait...';
+  btn.disabled = true;
+
+  try {
+    const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+    const data = await api(endpoint, 'POST', { email, password });
+
+    // Save token and user
+    state.token = data.token;
+    state.user  = data.user;
+    localStorage.setItem('tp_token', data.token);
+    localStorage.setItem('tp_user', JSON.stringify(data.user));
+
+    closeModal('authModal');
+    updateUserUI();
+    showToast(authMode === 'login' ? '✅ Welcome back!' : '✅ Account created! You have 10 free credits.', 'success');
+  } catch (err) {
+    showToast('❌ ' + err.message, 'error');
+  } finally {
+    btn.textContent = authMode === 'login' ? 'Sign In' : 'Create Account';
+    btn.disabled = false;
+  }
+}
+
+function signOut() {
+  state.token = null;
+  state.user  = null;
+  localStorage.removeItem('tp_token');
+  localStorage.removeItem('tp_user');
+  updateUserUI();
+  showToast('👋 Signed out', '');
+  document.getElementById('userDropdown').classList.remove('open');
+}
+
+function updateUserUI() {
+  const u = state.user;
+  if (u) {
+    // Update name displays
+    document.querySelectorAll('.user-name').forEach(el => el.textContent = u.email.split('@')[0]);
+    document.querySelectorAll('.dropdown-name').forEach(el => el.textContent = u.email.split('@')[0]);
+    document.querySelectorAll('.user-avatar, .dropdown-avatar').forEach(el => el.textContent = u.email[0].toUpperCase());
+    // Update plan badge
+    const isPremium = u.plan === 'lifetime';
+    document.querySelectorAll('.user-badge').forEach(el => el.textContent = isPremium ? '👑 PREMIUM' : '🆓 Free');
+    document.querySelectorAll('.premium-badge').forEach(el => el.textContent = isPremium ? '👑 LIFETIME PREMIUM' : '🆓 Free Plan');
+    // Credits
+    state.credits = u.credits || 0;
+    state.watched = u.totalWatched || 0;
+  }
+  updateStats();
+}
+
+async function loadProfile() {
+  if (!state.token) return;
+  try {
+    const data = await api('/api/auth/me');
+    state.user = data.user;
+    localStorage.setItem('tp_user', JSON.stringify(data.user));
+    updateUserUI();
+  } catch {
+    // Token expired - sign out
+    signOut();
+  }
+}
+
+// ─── VIDEO PLAY ───────────────────────────────────────────────────────────────
 async function handlePlay() {
   const url = document.getElementById('videoUrlInput').value.trim();
   if (!url) { showError('Please paste a TeraBox link first.'); return; }
 
-  if (state.credits <= 0) {
+  // Must be logged in
+  if (!state.token) {
+    showToast('Please sign in to play videos', 'error');
+    openModal('authModal');
+    return;
+  }
+
+  if (state.credits <= 0 && state.user?.plan !== 'lifetime') {
     showError('No credits left! Upgrade your plan to continue.');
     openModal('payModal');
     return;
@@ -1097,111 +1174,153 @@ async function handlePlay() {
   showLoading(true);
 
   try {
-    const data = await fetchVideoUrl(url);
+    const data = await api('/api/video/play', 'POST', { url });
 
-    // Deduct credit
-    state.credits--;
+    // Update credits from server response
+    state.credits = data.creditsLeft;
     state.watched++;
-    state.currentUrl = url;
-    state.currentTitle = data.title || 'Video';
-
+    state.currentUrl  = url;
+    state.currentTitle = 'TeraBox Video';
     updateStats();
-    addToHistory(url, data.title || 'TeraBox Video');
+    addToHistory(url, 'TeraBox Video');
 
     const playerSection = document.getElementById('playerSection');
-    const videoEl = document.getElementById('videoEl');
-    const playerTitle = document.getElementById('playerTitle');
+    const videoEl       = document.getElementById('videoEl');
+    const playerTitle   = document.getElementById('playerTitle');
 
     playerSection.classList.add('active');
-    playerTitle.textContent = data.title || 'Now Playing';
+    playerTitle.textContent = 'Now Playing';
     playerSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-    if (data.videoUrl) {
-      videoEl.src = data.videoUrl;
-      videoEl.style.display = 'block';
-      videoEl.play().catch(() => {});
-    } else {
-      // No direct URL returned - show instructional state
-      videoEl.src = '';
-      videoEl.style.display = 'none';
-      const wrapper = videoEl.parentElement;
-      wrapper.innerHTML = `<div class="player-placeholder">
-        <div class="ph-icon">▶</div>
-        <div style="color:var(--text2)">Connect your TeraBox API to stream videos</div>
-        <div style="font-size:12px;color:var(--text3)">See STEP 3 in setup guide below</div>
-      </div>`;
+    // Try to find a direct video URL from the API response
+    const videoData = data.videoData;
+    let directUrl = null;
+
+    // XAPIVerse returns different formats — try all common fields
+    if (videoData) {
+      directUrl = videoData.url
+        || videoData.video_url
+        || videoData.direct_link
+        || videoData.dlink
+        || (videoData.list && videoData.list[0] && videoData.list[0].url)
+        || (Array.isArray(videoData) && videoData[0]?.url);
     }
 
-    showToast('▶ Playing video · 1 credit used', 'success');
+    if (directUrl) {
+      videoEl.src = directUrl;
+      videoEl.style.display = 'block';
+      videoEl.play().catch(() => {});
+      showToast('▶ Playing · 1 credit used · ' + state.credits + ' left', 'success');
+    } else {
+      videoEl.style.display = 'none';
+      videoEl.parentElement.innerHTML = `
+        <div class="player-placeholder">
+          <div class="ph-icon">▶</div>
+          <div style="color:var(--text2);margin-bottom:8px;">Video fetched — 1 credit used</div>
+          <div style="font-size:12px;color:var(--text3);max-width:320px;text-align:center;">
+            API returned data but no direct URL found.<br/>
+            Open browser console to see raw response.
+          </div>
+        </div>`;
+      console.log('Raw API response:', videoData);
+      showToast('▶ 1 credit used. Check console for video data.', 'success');
+    }
   } catch (err) {
+    if (err.message.includes('credits')) {
+      openModal('payModal');
+    }
     showError(err.message || 'Could not load video. Check the link and try again.');
   } finally {
     showLoading(false);
   }
 }
 
-function handleDownload() {
+async function handleDownload() {
   const url = document.getElementById('videoUrlInput').value.trim() || state.currentUrl;
   if (!url) { showError('Paste a link first.'); return; }
-  // Trigger download via API
-  // window.open(`${API_BASE}/api/download?url=${encodeURIComponent(url)}&key=${API_KEY}`, '_blank');
-  showToast('⬇ Download started (connect API to enable)', 'success');
+  if (!state.token) { openModal('authModal'); return; }
+  showToast('⬇ Fetching download link...', '');
+  try {
+    const data = await api('/api/video/play', 'POST', { url });
+    const videoData = data.videoData;
+    const directUrl = videoData?.url || videoData?.dlink || videoData?.direct_link
+      || (videoData?.list && videoData.list[0]?.url);
+    if (directUrl) {
+      window.open(directUrl, '_blank');
+      showToast('⬇ Download started!', 'success');
+    } else {
+      showToast('Could not get download link', 'error');
+    }
+  } catch (err) {
+    showToast('❌ ' + err.message, 'error');
+  }
 }
 
 function copyLink() {
   const url = state.currentUrl || document.getElementById('videoUrlInput').value;
-  if (url) {
-    navigator.clipboard.writeText(url).then(() => showToast('🔗 Link copied!', 'success'));
-  }
+  if (url) navigator.clipboard.writeText(url).then(() => showToast('🔗 Link copied!', 'success'));
 }
 
 // ─── BOOKMARKS ────────────────────────────────────────────────────────────────
-function bookmarkCurrent() {
-  const url = state.currentUrl;
-  const title = state.currentTitle;
+async function bookmarkCurrent() {
+  if (!state.token) { openModal('authModal'); return; }
+  const url   = state.currentUrl;
+  const title = state.currentTitle || 'TeraBox Video';
   if (!url) return;
-
-  const exists = state.bookmarks.find(b => b.url === url);
-  if (exists) {
-    state.bookmarks = state.bookmarks.filter(b => b.url !== url);
-    showToast('Bookmark removed', 'error');
-  } else {
-    state.bookmarks.push({ url, title, time: Date.now() });
+  try {
+    await api('/api/bookmarks', 'POST', { url, title });
+    state.bookmarks.unshift({ url, title, time: Date.now() });
+    updateStats();
     showToast('🔖 Bookmarked!', 'success');
+    document.getElementById('bookmarkBtn').classList.add('bookmark-active');
+  } catch (err) {
+    showToast(err.message === 'Already bookmarked' ? '🔖 Already saved!' : '❌ ' + err.message, 'error');
   }
-  updateStats();
-  renderBookmarks();
 }
 
-function toggleBookmark(url, title, btn) {
-  const exists = state.bookmarks.find(b => b.url === url);
-  if (exists) {
-    state.bookmarks = state.bookmarks.filter(b => b.url !== url);
-    btn.classList.remove('active');
-    showToast('Bookmark removed', 'error');
-  } else {
-    state.bookmarks.push({ url, title, time: Date.now() });
+async function loadBookmarks() {
+  if (!state.token) return;
+  try {
+    const data = await api('/api/bookmarks');
+    state.bookmarks = data.bookmarks || [];
+    updateStats();
+    renderBookmarks();
+  } catch {}
+}
+
+async function toggleBookmark(url, title, btn) {
+  if (!state.token) { openModal('authModal'); return; }
+  try {
+    await api('/api/bookmarks', 'POST', { url, title });
+    state.bookmarks.unshift({ url, title, time: Date.now() });
     btn.classList.add('active');
     showToast('🔖 Bookmarked!', 'success');
+    updateStats();
+  } catch (err) {
+    if (err.message === 'Already bookmarked') {
+      showToast('Already saved!', '');
+    } else {
+      showToast('❌ ' + err.message, 'error');
+    }
   }
-  updateStats();
-  renderBookmarks();
 }
 
 function renderBookmarks() {
   const grid = document.getElementById('bookmarksGrid');
   if (!grid) return;
   if (!state.bookmarks.length) {
-    grid.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:16px 0;grid-column:1/-1;">No bookmarks yet.</div>';
+    grid.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:16px 0;grid-column:1/-1;">No bookmarks yet. Bookmark videos while playing.</div>';
     return;
   }
-  grid.innerHTML = state.bookmarks.map((b, i) => videoCardHTML(b.url, b.title, i, true)).join('');
+  grid.innerHTML = state.bookmarks.map((b, i) => videoCardHTML(b.url, b.title || 'TeraBox Video', i, true)).join('');
 }
 
-// ─── HISTORY ──────────────────────────────────────────────────────────────────
+// ─── HISTORY (stored locally) ─────────────────────────────────────────────────
 function addToHistory(url, title) {
+  state.history = state.history.filter(h => h.url !== url);
   state.history.unshift({ url, title, time: Date.now() });
-  if (state.history.length > 20) state.history.pop();
+  if (state.history.length > 30) state.history.pop();
+  localStorage.setItem('tp_history', JSON.stringify(state.history));
   renderRecent();
   renderHistorySection();
 }
@@ -1213,11 +1332,9 @@ function renderRecent() {
     el.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:16px 0;">No history yet. Play a video to get started.</div>';
     return;
   }
-  el.innerHTML = state.history.slice(0, 6).map((h, i) => `
+  el.innerHTML = state.history.slice(0, 6).map(h => `
     <div class="recent-item" onclick="loadFromHistory('${escHtml(h.url)}')">
-      <div class="recent-thumb">
-        <div class="recent-thumb-bg">🎬</div>
-      </div>
+      <div class="recent-thumb"><div class="recent-thumb-bg">🎬</div></div>
       <div class="recent-info">
         <div class="recent-title">${escHtml(h.title)}</div>
         <div class="recent-meta">${timeAgo(h.time)}</div>
@@ -1236,7 +1353,7 @@ function renderHistorySection() {
     el.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:16px 0;">No history yet.</div>';
     return;
   }
-  el.innerHTML = state.history.map((h) => `
+  el.innerHTML = state.history.map(h => `
     <div class="recent-item" onclick="loadFromHistory('${escHtml(h.url)}')">
       <div class="recent-thumb"><div class="recent-thumb-bg">🎬</div></div>
       <div class="recent-info">
@@ -1252,20 +1369,20 @@ function loadFromHistory(url) {
   handlePlay();
 }
 
-// ─── POPULAR VIDEOS (demo) ────────────────────────────────────────────────────
+// ─── POPULAR VIDEOS (demo cards) ─────────────────────────────────────────────
 const demoVideos = [
   { title: 'The Grand Canyon – 4K Documentary', views: '2.4M', duration: '18:42', emoji: '🏜️', url: 'https://terabox.com/s/demo1' },
   { title: 'Ocean Depths – Deep Sea Exploration', views: '1.8M', duration: '24:15', emoji: '🌊', url: 'https://terabox.com/s/demo2' },
-  { title: 'Northern Lights – Iceland 2024', views: '956K', duration: '8:30', emoji: '🌌', url: 'https://terabox.com/s/demo3' },
-  { title: 'Street Food – Tokyo Night Market', views: '3.1M', duration: '31:00', emoji: '🍣', url: 'https://terabox.com/s/demo4' },
-  { title: 'Himalayan Trek – Base Camp Journey', views: '742K', duration: '45:10', emoji: '⛰️', url: 'https://terabox.com/s/demo5' },
-  { title: 'Amazon Rainforest – Wildlife Special', views: '1.2M', duration: '55:00', emoji: '🦋', url: 'https://terabox.com/s/demo6' },
-  { title: 'SpaceX Launch – Full Coverage', views: '8.9M', duration: '2:14:00', emoji: '🚀', url: 'https://terabox.com/s/demo7' },
-  { title: 'Bali Sunrise – Aerial Photography', views: '664K', duration: '6:48', emoji: '🌅', url: 'https://terabox.com/s/demo8' },
+  { title: 'Northern Lights – Iceland 2024',      views: '956K', duration: '8:30',  emoji: '🌌', url: 'https://terabox.com/s/demo3' },
+  { title: 'Street Food – Tokyo Night Market',    views: '3.1M', duration: '31:00', emoji: '🍣', url: 'https://terabox.com/s/demo4' },
+  { title: 'Himalayan Trek – Base Camp Journey',  views: '742K', duration: '45:10', emoji: '⛰️', url: 'https://terabox.com/s/demo5' },
+  { title: 'Amazon Rainforest – Wildlife Special',views: '1.2M', duration: '55:00', emoji: '🦋', url: 'https://terabox.com/s/demo6' },
+  { title: 'SpaceX Launch – Full Coverage',       views: '8.9M', duration: '2:14:00',emoji: '🚀', url: 'https://terabox.com/s/demo7' },
+  { title: 'Bali Sunrise – Aerial Photography',   views: '664K', duration: '6:48',  emoji: '🌅', url: 'https://terabox.com/s/demo8' },
 ];
 
 function videoCardHTML(url, title, index, bookmarked = false) {
-  const d = demoVideos[index % demoVideos.length];
+  const d   = demoVideos[index % demoVideos.length];
   const isBk = bookmarked || state.bookmarks.some(b => b.url === url);
   return `
     <div class="video-card" onclick="loadFromHistory('${escHtml(url)}')">
@@ -1283,8 +1400,7 @@ function videoCardHTML(url, title, index, bookmarked = false) {
           <button class="card-bk-btn ${isBk?'active':''}" onclick="event.stopPropagation(); toggleBookmark('${escHtml(url)}','${escHtml(title||d.title)}',this)">🔖</button>
         </div>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
 function renderPopular() {
@@ -1299,32 +1415,31 @@ function showSection(name) {
     const el = document.getElementById('section-' + s);
     if (el) el.style.display = s === name ? '' : 'none';
   });
-  // If bookmarks, render
-  if (name === 'bookmarks') renderBookmarks();
-  if (name === 'history') renderHistorySection();
+  if (name === 'bookmarks') { loadBookmarks(); renderBookmarks(); }
+  if (name === 'history')   renderHistorySection();
   closeSidebar();
 }
 
 // ─── STATS ────────────────────────────────────────────────────────────────────
 function updateStats() {
-  document.getElementById('statCredits').textContent = state.credits;
-  document.getElementById('statWatched').textContent = state.watched;
+  const credits = state.user?.plan === 'lifetime' ? '∞' : (state.user?.credits ?? state.credits);
+  document.getElementById('statCredits').textContent  = credits;
+  document.getElementById('statWatched').textContent  = state.user?.totalWatched ?? state.watched;
   document.getElementById('statBookmarks').textContent = state.bookmarks.length;
-  document.getElementById('creditsDisplay').textContent = state.credits + ' Credits';
+  document.getElementById('creditsDisplay').textContent = credits + ' Credits';
+  // Plan display
+  const plan = state.user?.plan || 'guest';
+  const planEl = document.getElementById('statPlan');
+  if (planEl) planEl.textContent = plan === 'lifetime' ? '👑 Lifetime' : plan === 'credits' ? '💳 Credits' : '🆓 Free';
 }
 
 // ─── UI HELPERS ───────────────────────────────────────────────────────────────
-function showLoading(on) {
-  document.getElementById('loadingBar').classList.toggle('active', on);
-}
+function showLoading(on) { document.getElementById('loadingBar').classList.toggle('active', on); }
 function showError(msg) {
-  const el = document.getElementById('errorBanner');
   document.getElementById('errorMsg').textContent = msg;
-  el.classList.add('active');
+  document.getElementById('errorBanner').classList.add('active');
 }
-function hideError() {
-  document.getElementById('errorBanner').classList.remove('active');
-}
+function hideError() { document.getElementById('errorBanner').classList.remove('active'); }
 function showToast(msg, type = '') {
   const c = document.getElementById('toastContainer');
   const t = document.createElement('div');
@@ -1335,8 +1450,8 @@ function showToast(msg, type = '') {
 }
 function timeAgo(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 60)    return 'just now';
+  if (s < 3600)  return Math.floor(s/60) + 'm ago';
   if (s < 86400) return Math.floor(s/3600) + 'h ago';
   return Math.floor(s/86400) + 'd ago';
 }
@@ -1349,15 +1464,14 @@ function openModal(id) {
   document.getElementById(id).classList.add('open');
   document.getElementById('userDropdown').classList.remove('open');
 }
-function closeModal(id) {
-  document.getElementById(id).classList.remove('open');
-}
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
 });
 
 // ─── DROPDOWN ─────────────────────────────────────────────────────────────────
 function toggleDropdown() {
+  if (!state.token) { openModal('authModal'); return; }
   const dd = document.getElementById('userDropdown');
   const ch = document.getElementById('chevron');
   const isOpen = dd.classList.toggle('open');
@@ -1371,7 +1485,7 @@ document.addEventListener('click', e => {
 });
 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
-function openSidebar() {
+function openSidebar()  {
   document.getElementById('sidebar').classList.add('open');
   document.getElementById('sidebarOverlay').classList.add('open');
 }
@@ -1380,31 +1494,57 @@ function closeSidebar() {
   document.getElementById('sidebarOverlay').classList.remove('open');
 }
 
-// ─── AUTH ─────────────────────────────────────────────────────────────────────
-let authMode = 'login';
-function switchAuth(mode) {
-  authMode = mode;
-  document.getElementById('tabLogin').classList.toggle('active', mode === 'login');
-  document.getElementById('tabRegister').classList.toggle('active', mode === 'register');
-  document.querySelector('.btn-full').textContent = mode === 'login' ? 'Sign In' : 'Create Account';
-}
-function handleAuth() {
-  showToast(authMode === 'login' ? '✅ Signed in!' : '✅ Account created!', 'success');
-  closeModal('authModal');
-}
-
 // ─── PAYMENT ─────────────────────────────────────────────────────────────────
+let selectedPlan = null;
+
 function handlePayment(plan) {
-  document.querySelectorAll('.plan-card').forEach(c => c.style.opacity = '0.5');
+  selectedPlan = plan;
+  document.querySelectorAll('.plan-card').forEach(c => {
+    c.style.opacity = '0.5';
+    c.style.borderColor = '';
+  });
   event.currentTarget.style.opacity = '1';
   event.currentTarget.style.borderColor = 'var(--accent)';
 }
-function initiateRazorpay() {
-  // INTEGRATE RAZORPAY:
-  // const rzp = new Razorpay({ key: 'rzp_live_xxx', amount: 39900, currency: 'INR', ... });
-  // rzp.open();
-  showToast('💳 Razorpay integration: see setup guide', 'success');
-  closeModal('payModal');
+
+async function initiateRazorpay() {
+  if (!state.token) { closeModal('payModal'); openModal('authModal'); return; }
+  if (!selectedPlan) { showToast('Please select a plan first', 'error'); return; }
+  try {
+    const order = await api('/api/payment/create-order', 'POST', { plan: selectedPlan });
+    const options = {
+      key: 'YOUR_RAZORPAY_KEY_ID', // ← replace with your rzp_live_ or rzp_test_ key
+      amount: order.amount,
+      currency: order.currency,
+      name: 'iTeraPlay',
+      description: selectedPlan === 'lifetime' ? 'Lifetime Premium' : selectedPlan + ' Credits',
+      order_id: order.orderId,
+      handler: async function(response) {
+        try {
+          const verify = await api('/api/payment/verify', 'POST', {
+            razorpay_order_id:   response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature:  response.razorpay_signature,
+            plan: selectedPlan
+          });
+          state.user.credits = verify.credits;
+          state.user.plan    = verify.plan;
+          localStorage.setItem('tp_user', JSON.stringify(state.user));
+          updateUserUI();
+          closeModal('payModal');
+          showToast('🎉 Payment successful! Credits added.', 'success');
+        } catch(e) {
+          showToast('❌ Payment verification failed', 'error');
+        }
+      },
+      prefill: { email: state.user?.email || '' },
+      theme: { color: '#4f6ef7' }
+    };
+    const rzp = new window.Razorpay(options);
+    rzp.open();
+  } catch(err) {
+    showToast('❌ ' + err.message, 'error');
+  }
 }
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
@@ -1413,14 +1553,23 @@ function toggleTheme() { showToast('Theme customization — coming soon!', ''); 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 renderPopular();
 renderRecent();
-updateStats();
 
-// Auto-load from URL params (deep linking)
+// Load user if already logged in
+if (state.token) {
+  updateUserUI();
+  loadProfile();
+  loadBookmarks();
+} else {
+  updateStats();
+}
+
+// Auto-load from URL params
 const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.get('v')) {
   document.getElementById('videoUrlInput').value = urlParams.get('v');
-  setTimeout(handlePlay, 500);
+  setTimeout(handlePlay, 800);
 }
 </script>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </body>
 </html>
